@@ -41,6 +41,7 @@ import {
   shouldKeepSubagentRunChildLink,
 } from "../agents/subagent-run-liveness.js";
 import { listThinkingLevelOptions } from "../auto-reply/thinking.js";
+import type { ThinkingLevelOption } from "../auto-reply/thinking.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { resolveAgentModelFallbackValues } from "../config/model-input.js";
 import { resolveStateDir } from "../config/paths.js";
@@ -79,6 +80,7 @@ import {
   normalizeOptionalLowercaseString,
 } from "../shared/string-coerce.js";
 import { normalizeSessionDeliveryFields } from "../utils/delivery-context.shared.js";
+import type { ModelCostConfig } from "../utils/usage-format.js";
 import { estimateUsageCost, resolveModelCostConfig } from "../utils/usage-format.js";
 import {
   canonicalizeSpawnedByForAgent,
@@ -295,6 +297,46 @@ function buildCompactionCheckpointPreview(
   };
 }
 
+/**
+ * Per-list resolver cache shared across rows so repeated work for the same
+ * (provider, model) tuple is collapsed into a single computation. Sessions in
+ * a single list typically share a small set of provider/model combinations,
+ * which makes per-call memoization a large win for sessions.list at scale.
+ */
+export type SessionListRowResolverCache = {
+  thinkingLevels: Map<string, ThinkingLevelOption[]>;
+  thinkingDefault: Map<string, string | undefined>;
+  displayModelIdentity: Map<string, { provider?: string; model?: string }>;
+  costConfig: Map<string, ModelCostConfig | undefined>;
+};
+
+export function createSessionListRowResolverCache(): SessionListRowResolverCache {
+  return {
+    thinkingLevels: new Map(),
+    thinkingDefault: new Map(),
+    displayModelIdentity: new Map(),
+    costConfig: new Map(),
+  };
+}
+
+function resolveModelCostConfigCached(
+  provider: string | undefined,
+  model: string | undefined,
+  cfg: OpenClawConfig,
+  cache?: SessionListRowResolverCache,
+): ModelCostConfig | undefined {
+  if (!cache) {
+    return resolveModelCostConfig({ provider, model, config: cfg });
+  }
+  const key = `${provider ?? ""}|${model ?? ""}`;
+  if (cache.costConfig.has(key)) {
+    return cache.costConfig.get(key);
+  }
+  const value = resolveModelCostConfig({ provider, model, config: cfg });
+  cache.costConfig.set(key, value);
+  return value;
+}
+
 function resolveEstimatedSessionCostUsd(params: {
   cfg: OpenClawConfig;
   provider?: string;
@@ -304,6 +346,7 @@ function resolveEstimatedSessionCostUsd(params: {
     "estimatedCostUsd" | "inputTokens" | "outputTokens" | "cacheRead" | "cacheWrite"
   >;
   explicitCostUsd?: number;
+  resolverCache?: SessionListRowResolverCache;
 }): number | undefined {
   const explicitCostUsd = resolveNonNegativeNumber(
     params.explicitCostUsd ?? params.entry?.estimatedCostUsd,
@@ -323,11 +366,12 @@ function resolveEstimatedSessionCostUsd(params: {
   ) {
     return undefined;
   }
-  const cost = resolveModelCostConfig({
-    provider: params.provider,
-    model: params.model,
-    config: params.cfg,
-  });
+  const cost = resolveModelCostConfigCached(
+    params.provider,
+    params.model,
+    params.cfg,
+    params.resolverCache,
+  );
   if (!cost) {
     return undefined;
   }
@@ -529,6 +573,7 @@ function resolveTranscriptUsageFallback(params: {
   fallbackProvider?: string;
   fallbackModel?: string;
   maxTranscriptBytes?: number;
+  resolverCache?: SessionListRowResolverCache;
 }): {
   estimatedCostUsd?: number;
   totalTokens?: number;
@@ -575,6 +620,7 @@ function resolveTranscriptUsageFallback(params: {
       cacheRead: snapshot.cacheRead,
       cacheWrite: snapshot.cacheWrite,
     },
+    resolverCache: params.resolverCache,
   });
   return {
     modelProvider,
@@ -1378,6 +1424,79 @@ export function resolveSessionModelIdentityRef(
   return { provider: resolved.provider, model: resolved.model };
 }
 
+function resolveThinkingLevelsCached(
+  provider: string | undefined,
+  model: string | undefined,
+  catalog: ModelCatalogEntry[] | undefined,
+  cache: SessionListRowResolverCache | undefined,
+): ThinkingLevelOption[] {
+  if (!cache) {
+    return listThinkingLevelOptions(provider, model, catalog);
+  }
+  const key = `${provider ?? ""}|${model ?? ""}`;
+  const cached = cache.thinkingLevels.get(key);
+  if (cached) {
+    return cached;
+  }
+  const value = listThinkingLevelOptions(provider, model, catalog);
+  cache.thinkingLevels.set(key, value);
+  return value;
+}
+
+function resolveGatewaySessionThinkingDefaultCached(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+  agentId?: string;
+  modelCatalog?: ModelCatalogEntry[];
+  resolverCache?: SessionListRowResolverCache;
+}): string | undefined {
+  const cache = params.resolverCache;
+  if (!cache) {
+    return resolveGatewaySessionThinkingDefault({
+      cfg: params.cfg,
+      provider: params.provider,
+      model: params.model,
+      agentId: params.agentId,
+      modelCatalog: params.modelCatalog,
+    });
+  }
+  const key = `${params.agentId ?? ""}|${params.provider}|${params.model}`;
+  if (cache.thinkingDefault.has(key)) {
+    return cache.thinkingDefault.get(key);
+  }
+  const value = resolveGatewaySessionThinkingDefault({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    agentId: params.agentId,
+    modelCatalog: params.modelCatalog,
+  });
+  cache.thinkingDefault.set(key, value);
+  return value;
+}
+
+function resolveSessionDisplayModelIdentityRefCached(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  provider?: string;
+  model?: string;
+  resolverCache?: SessionListRowResolverCache;
+}): { provider?: string; model?: string } {
+  const cache = params.resolverCache;
+  if (!cache) {
+    return resolveSessionDisplayModelIdentityRef(params);
+  }
+  const key = `${params.agentId}|${params.provider ?? ""}|${params.model ?? ""}`;
+  const cached = cache.displayModelIdentity.get(key);
+  if (cached) {
+    return cached;
+  }
+  const value = resolveSessionDisplayModelIdentityRef(params);
+  cache.displayModelIdentity.set(key, value);
+  return value;
+}
+
 export function resolveSessionDisplayModelIdentityRef(params: {
   cfg: OpenClawConfig;
   agentId: string;
@@ -1432,6 +1551,7 @@ export function buildGatewaySessionRow(params: {
   rowContext?: SessionListRowContext;
   skipTranscriptUsageFallback?: boolean;
   lightweightListRow?: boolean;
+  resolverCache?: SessionListRowResolverCache;
 }): GatewaySessionRow {
   const { cfg, storePath, store, key, entry } = params;
   const lightweight = params.lightweightListRow === true;
@@ -1529,13 +1649,17 @@ export function buildGatewaySessionRow(params: {
   const needsTranscriptTotalTokens =
     resolvePositiveNumber(resolveFreshSessionTotalTokens(entry)) === undefined;
   const needsTranscriptContextTokens = resolvePositiveNumber(entry?.contextTokens) === undefined;
-  const needsTranscriptEstimatedCostUsd =
-    resolveEstimatedSessionCostUsd({
-      cfg,
-      provider: resolvedModel.provider,
-      model: resolvedModel.model ?? DEFAULT_MODEL,
-      entry,
-    }) === undefined;
+  // When skipTranscriptUsage is true the result of resolveTranscriptUsageFallback
+  // is forced to null, so computing needsTranscriptEstimatedCostUsd would only
+  // burn CPU through resolveModelCostConfig without affecting the row. Skip it.
+  const needsTranscriptEstimatedCostUsd = skipTranscriptUsage
+    ? false
+    : resolveEstimatedSessionCostUsd({
+        cfg,
+        provider: resolvedModel.provider,
+        model: resolvedModel.model ?? DEFAULT_MODEL,
+        entry,
+      }) === undefined;
   const transcriptUsage =
     !skipTranscriptUsage &&
     (needsTranscriptTotalTokens || needsTranscriptContextTokens || needsTranscriptEstimatedCostUsd)
@@ -1547,6 +1671,7 @@ export function buildGatewaySessionRow(params: {
           fallbackProvider: resolvedModel.provider,
           fallbackModel: resolvedModel.model ?? DEFAULT_MODEL,
           maxTranscriptBytes: params.transcriptUsageMaxBytes,
+          resolverCache: params.resolverCache,
         })
       : null;
   const preferLiveSubagentModelIdentity =
@@ -1587,11 +1712,12 @@ export function buildGatewaySessionRow(params: {
   const selectedOrRuntimeModel = selectedModel?.model ?? model;
   const rowModelIdentity = lightweight
     ? { provider: selectedOrRuntimeModelProvider, model: selectedOrRuntimeModel }
-    : resolveSessionDisplayModelIdentityRef({
+    : resolveSessionDisplayModelIdentityRefCached({
         cfg,
         agentId: sessionAgentId,
         provider: selectedOrRuntimeModelProvider,
         model: selectedOrRuntimeModel,
+        resolverCache: params.resolverCache,
       });
   const rowModelProvider = rowModelIdentity.provider;
   const rowModel = rowModelIdentity.model;
@@ -1602,6 +1728,7 @@ export function buildGatewaySessionRow(params: {
         provider: rowModelProvider,
         model: rowModel,
         entry,
+        resolverCache: params.resolverCache,
       }) ?? resolveNonNegativeNumber(transcriptUsage?.estimatedCostUsd));
   const contextTokens = lightweight
     ? resolvePositiveNumber(entry?.contextTokens)
@@ -1635,10 +1762,11 @@ export function buildGatewaySessionRow(params: {
 
   const thinkingProvider = rowModelProvider ?? DEFAULT_PROVIDER;
   const thinkingModel = rowModel ?? DEFAULT_MODEL;
-  const thinkingLevels = listThinkingLevelOptions(
+  const thinkingLevels = resolveThinkingLevelsCached(
     thinkingProvider,
     thinkingModel,
     params.modelCatalog,
+    params.resolverCache,
   );
   const pluginExtensions =
     !lightweight && entry ? projectPluginSessionExtensionsSync({ sessionKey: key, entry }) : [];
@@ -1671,12 +1799,13 @@ export function buildGatewaySessionRow(params: {
     thinkingOptions: thinkingLevels.map((level) => level.label),
     thinkingDefault: lightweight
       ? entry?.thinkingLevel
-      : resolveGatewaySessionThinkingDefault({
+      : resolveGatewaySessionThinkingDefaultCached({
           cfg,
           provider: thinkingProvider,
           model: thinkingModel,
           agentId: sessionAgentId,
           modelCatalog: params.modelCatalog,
+          resolverCache: params.resolverCache,
         }),
     fastMode: entry?.fastMode,
     verboseLevel: entry?.verboseLevel,
@@ -1944,6 +2073,7 @@ export function listSessionsFromStore(params: {
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
   });
 
+  const resolverCache = createSessionListRowResolverCache();
   const sessions = entries.map(([key, entry], index) => {
     const includeTranscriptFields = index < sessionListTranscriptFieldRows;
     return buildGatewaySessionRow({
@@ -1959,6 +2089,7 @@ export function listSessionsFromStore(params: {
       transcriptUsageMaxBytes: sessionListTranscriptUsageMaxBytes,
       storeChildSessionsByKey: getRowContext().storeChildSessionsByKey,
       rowContext: getRowContext(),
+      resolverCache,
     });
   });
 
@@ -2008,6 +2139,7 @@ export async function listSessionsFromStoreAsync(params: {
     rowContext: hasSpawnedByFilter ? getRowContext() : undefined,
   });
 
+  const resolverCache = createSessionListRowResolverCache();
   const sessions: GatewaySessionRow[] = [];
   for (let i = 0; i < entries.length; i++) {
     const [key, entry] = entries[i];
@@ -2027,6 +2159,7 @@ export async function listSessionsFromStoreAsync(params: {
       rowContext: getRowContext(),
       skipTranscriptUsageFallback: true,
       lightweightListRow: true,
+      resolverCache,
     });
     if (
       entry?.sessionId &&
