@@ -182,6 +182,7 @@ export function resolveExternalAuthProfileProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
   manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   return resolveRegistryManifestContractPluginIds({
@@ -197,6 +198,7 @@ function resolveRegistryManifestContractPluginIds(params: {
   env?: PluginLoadOptions["env"];
   origin?: PluginRegistryRecord["origin"];
   onlyPluginIds?: readonly string[];
+  registry?: PluginRegistrySnapshot;
   manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   const { registry, onlyPluginIdSet } = loadScopedProviderRegistry(params);
@@ -225,6 +227,7 @@ export function resolveExternalAuthProfileCompatFallbackPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
   declaredPluginIds?: ReadonlySet<string>;
   manifestRegistry?: PluginManifestRegistry;
 }): string[] {
@@ -616,10 +619,14 @@ export function resolveNonBundledProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   return listRegistryPluginIds(
     registry,
     (plugin) =>
@@ -637,10 +644,14 @@ export function resolveCatalogHookProviderPluginIds(params: {
   config?: PluginLoadOptions["config"];
   workspaceDir?: string;
   env?: PluginLoadOptions["env"];
+  registry?: PluginRegistrySnapshot;
+  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   const registry = loadProviderRegistrySnapshot(params);
   const providerSurfacePluginIds = resolveProviderSurfacePluginIdSet({ ...params, registry });
-  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
+  const normalizedConfig = normalizePluginsConfigWithRegistry(params.config?.plugins, registry, {
+    manifestRegistry: params.manifestRegistry,
+  });
   const enabledProviderPluginIds = listRegistryPluginIds(
     registry,
     (plugin) =>

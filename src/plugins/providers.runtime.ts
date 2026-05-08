@@ -2,6 +2,7 @@ import { withActivatedPluginIds } from "./activation-context.js";
 import { resolveBundledPluginCompatibleActivationInputs } from "./activation-context.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import { getLoadedRuntimePluginRegistry } from "./active-runtime-registry.js";
+import { getCurrentPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import {
   getRuntimePluginRegistryForLoadOptions,
   isPluginRegistryLoadInFlight,
@@ -119,13 +120,20 @@ function resolvePluginProviderLoadBase(params: {
 }) {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const pluginMetadataSnapshot =
+    params.pluginMetadataSnapshot ??
+    getCurrentPluginMetadataSnapshot({
+      config: params.config,
+      workspaceDir,
+      env,
+    });
   const providerOwnedPluginIds = params.providerRefs?.length
     ? resolveExplicitProviderOwnerPluginIds({
         providerRefs: params.providerRefs,
         config: params.config,
         workspaceDir,
         env,
-        pluginMetadataSnapshot: params.pluginMetadataSnapshot,
+        pluginMetadataSnapshot,
       })
     : [];
   const modelOwnedPluginIds = params.modelRefs?.length
@@ -134,7 +142,7 @@ function resolvePluginProviderLoadBase(params: {
         config: params.config,
         workspaceDir,
         env,
-        manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
+        manifestRegistry: pluginMetadataSnapshot?.manifestRegistry,
       })
     : [];
   const requestedPluginIds =
@@ -161,6 +169,7 @@ function resolvePluginProviderLoadBase(params: {
     requestedPluginIds,
     explicitOwnerPluginIds,
     rawConfig: params.config,
+    pluginMetadataSnapshot,
   };
 }
 
@@ -174,8 +183,8 @@ function resolveSetupProviderPluginLoadState(
     env: base.env,
     onlyPluginIds: base.requestedPluginIds,
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
-    registry: params.pluginMetadataSnapshot?.index,
-    manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
+    registry: base.pluginMetadataSnapshot?.index,
+    manifestRegistry: base.pluginMetadataSnapshot?.manifestRegistry,
   });
   const explicitOwnerPluginIds = resolveDiscoverableProviderOwnerPluginIds({
     pluginIds: base.explicitOwnerPluginIds,
@@ -183,8 +192,8 @@ function resolveSetupProviderPluginLoadState(
     workspaceDir: base.workspaceDir,
     env: base.env,
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
-    registry: params.pluginMetadataSnapshot?.index,
-    manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
+    registry: base.pluginMetadataSnapshot?.index,
+    manifestRegistry: base.pluginMetadataSnapshot?.manifestRegistry,
   });
   const setupPluginIds = mergeExplicitOwnerPluginIds(providerPluginIds, explicitOwnerPluginIds);
   if (setupPluginIds.length === 0) {
@@ -208,6 +217,9 @@ function resolveSetupProviderPluginLoadState(
       pluginSdkResolution: params.pluginSdkResolution,
       cache: params.cache ?? false,
       activate: params.activate ?? false,
+      ...(base.pluginMetadataSnapshot?.manifestRegistry
+        ? { manifestRegistry: base.pluginMetadataSnapshot.manifestRegistry }
+        : {}),
     },
   );
   return { loadOptions };
@@ -223,8 +235,8 @@ function resolveRuntimeProviderPluginLoadState(
     workspaceDir: base.workspaceDir,
     env: base.env,
     includeUntrustedWorkspacePlugins: params.includeUntrustedWorkspacePlugins,
-    registry: params.pluginMetadataSnapshot?.index,
-    manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
+    registry: base.pluginMetadataSnapshot?.index,
+    manifestRegistry: base.pluginMetadataSnapshot?.manifestRegistry,
   });
   const runtimeRequestedPluginIds =
     base.requestedPluginIds !== undefined
@@ -248,7 +260,7 @@ function resolveRuntimeProviderPluginLoadState(
     resolveCompatPluginIds: (compatParams) =>
       resolveBundledProviderCompatPluginIds({
         ...compatParams,
-        manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
+        manifestRegistry: base.pluginMetadataSnapshot?.manifestRegistry,
       }),
   });
   const config = params.bundledProviderVitestCompat
@@ -264,8 +276,8 @@ function resolveRuntimeProviderPluginLoadState(
       workspaceDir: base.workspaceDir,
       env: base.env,
       onlyPluginIds: runtimeRequestedPluginIds,
-      registry: params.pluginMetadataSnapshot?.index,
-      manifestRegistry: params.pluginMetadataSnapshot?.manifestRegistry,
+      registry: base.pluginMetadataSnapshot?.index,
+      manifestRegistry: base.pluginMetadataSnapshot?.manifestRegistry,
     }),
     explicitOwnerPluginIds,
   );
@@ -283,6 +295,9 @@ function resolveRuntimeProviderPluginLoadState(
       pluginSdkResolution: params.pluginSdkResolution,
       cache: params.cache ?? true,
       activate: params.activate ?? false,
+      ...(base.pluginMetadataSnapshot?.manifestRegistry
+        ? { manifestRegistry: base.pluginMetadataSnapshot.manifestRegistry }
+        : {}),
     },
   );
   return { loadOptions };

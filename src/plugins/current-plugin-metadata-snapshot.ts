@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveUserPath } from "../utils.js";
 import {
   clearCurrentPluginMetadataSnapshotState,
   getCurrentPluginMetadataSnapshotState,
@@ -12,6 +13,16 @@ import {
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
 type CurrentPluginMetadataSnapshotState = ReturnType<typeof getCurrentPluginMetadataSnapshotState>;
+
+function normalizeWorkspaceDir(
+  dir: string | undefined,
+  env?: NodeJS.ProcessEnv,
+): string | undefined {
+  if (dir === undefined) {
+    return undefined;
+  }
+  return resolveUserPath(dir, env);
+}
 
 export function resolvePluginMetadataControlPlaneFingerprint(
   config?: OpenClawConfig,
@@ -109,9 +120,11 @@ export function getCurrentPluginMetadataSnapshot(
       return undefined;
     }
   }
-  const requestedWorkspaceDir =
+  const requestedWorkspaceDir = normalizeWorkspaceDir(
     params.workspaceDir ??
-    (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined);
+      (params.allowWorkspaceScopedSnapshot === true ? snapshot.workspaceDir : undefined),
+    params.env,
+  );
   if (params.config) {
     const requestedConfigFingerprint = resolvePluginMetadataControlPlaneFingerprint(params.config, {
       env: params.env,
@@ -147,12 +160,13 @@ export function getCurrentPluginMetadataSnapshot(
       return undefined;
     }
   }
-  if (snapshot.workspaceDir !== undefined && requestedWorkspaceDir === undefined) {
+  const snapshotWorkspaceDir = normalizeWorkspaceDir(snapshot.workspaceDir, params.env);
+  if (snapshotWorkspaceDir !== undefined && requestedWorkspaceDir === undefined) {
     return undefined;
   }
   if (
     requestedWorkspaceDir !== undefined &&
-    (snapshot.workspaceDir ?? "") !== (requestedWorkspaceDir ?? "")
+    (snapshotWorkspaceDir ?? "") !== (requestedWorkspaceDir ?? "")
   ) {
     return undefined;
   }
