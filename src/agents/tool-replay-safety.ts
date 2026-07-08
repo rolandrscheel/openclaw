@@ -24,6 +24,8 @@ const UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES = new Set([
   "image",
 ]);
 
+const CONDITIONALLY_REPLAY_SAFE_CORE_TOOL_NAMES = new Set(["bash", "exec"]);
+
 /**
  * Tool names are not ownership boundaries. Callers must reject plugin/channel
  * instances before using this audited core-tool allowlist.
@@ -36,6 +38,21 @@ export function isAgentToolReplaySafe(
     return false;
   }
   return UNCONDITIONALLY_REPLAY_SAFE_TOOL_NAMES.has(normalizeToolName(tool.name ?? ""));
+}
+
+/**
+ * Core shell tools are replay-safe only for concrete calls that the tool
+ * mutation classifier proves read-only. This helper marks the instance as
+ * trusted; callers must still pass the actual args through that classifier.
+ */
+export function isAgentToolConditionallyReplaySafe(
+  tool: { name?: string },
+  options?: { declaredReplaySafe?: (tool: { name?: string }) => boolean | undefined },
+): boolean {
+  if (options?.declaredReplaySafe?.(tool) !== undefined) {
+    return false;
+  }
+  return CONDITIONALLY_REPLAY_SAFE_CORE_TOOL_NAMES.has(normalizeToolName(tool.name ?? ""));
 }
 
 /**

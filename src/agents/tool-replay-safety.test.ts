@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   collectReplaySafeToolNames,
+  isAgentToolConditionallyReplaySafe,
   isAgentToolReplaySafe,
   isCoreToolNameReplaySafe,
 } from "./tool-replay-safety.js";
@@ -19,6 +20,24 @@ describe("agent tool replay safety", () => {
     expect(
       isAgentToolReplaySafe(pluginTool, {
         declaredReplaySafe: (tool) => (tool === pluginTool ? false : undefined),
+      }),
+    ).toBe(false);
+  });
+
+  it("trusts core shell instances only through the conditional replay path", () => {
+    const coreExec = { name: "exec" };
+    const pluginExec = { name: "exec" };
+
+    expect(isAgentToolReplaySafe(coreExec)).toBe(false);
+    expect(isAgentToolConditionallyReplaySafe(coreExec)).toBe(true);
+    expect(
+      isAgentToolConditionallyReplaySafe(pluginExec, {
+        declaredReplaySafe: (tool) => (tool === pluginExec ? false : undefined),
+      }),
+    ).toBe(false);
+    expect(
+      isAgentToolConditionallyReplaySafe(pluginExec, {
+        declaredReplaySafe: (tool) => (tool === pluginExec ? true : undefined),
       }),
     ).toBe(false);
   });

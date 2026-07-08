@@ -236,7 +236,11 @@ import {
   buildEmptyExplicitToolAllowlistError,
   collectExplicitToolAllowlistSources,
 } from "../../tool-allowlist-guard.js";
-import { collectReplaySafeToolNames, isAgentToolReplaySafe } from "../../tool-replay-safety.js";
+import {
+  collectReplaySafeToolNames,
+  isAgentToolConditionallyReplaySafe,
+  isAgentToolReplaySafe,
+} from "../../tool-replay-safety.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
 import {
@@ -3818,7 +3822,11 @@ export async function runEmbeddedAttempt(
             toolName: toolParams.toolName,
             toolCallId: toolParams.toolCallId,
             args: toolParams.input,
-            replaySafe: replaySafeTools.has(toolParams.tool as never),
+            replaySafe:
+              replaySafeTools.has(toolParams.tool as never) ||
+              (toolParams.source === "openclaw" &&
+                toolParams.sourceName === "core" &&
+                isAgentToolConditionallyReplaySafe(toolParams.tool, replaySafetyOptions)),
             hideFromChannelProgress:
               "hideFromChannelProgress" in toolParams.tool &&
               toolParams.tool.hideFromChannelProgress === true,

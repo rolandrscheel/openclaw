@@ -45,12 +45,16 @@ describe("tool mutation helpers", () => {
     ["exec", "sed -n '1,220p' src/agents/tool-mutation.ts"],
     ["bash", "cat package.json"],
     ["exec", "rg -n tool-mutation src/agents"],
+    ["exec", 'find target -name "*.jar"'],
+    ["exec", "find target -name '*.jar'"],
     ["exec", "gh search prs --repo openclaw/openclaw tool-mutation --json number,title,state"],
     ["bash", "gh pr view 123 --repo openclaw/openclaw --json title,state"],
   ])("treats read-only shell command as non-mutating: %s %s", (toolName, command) => {
     expect(isMutatingToolCall(toolName, { command })).toBe(false);
     expect(buildToolMutationState(toolName, { command }).mutatingAction).toBe(false);
-    expect(buildToolMutationState(toolName, { command }, command).actionFingerprint).toBeUndefined();
+    expect(
+      buildToolMutationState(toolName, { command }, command).actionFingerprint,
+    ).toBeUndefined();
   });
 
   it.each([
@@ -67,6 +71,9 @@ describe("tool mutation helpers", () => {
     ["bash", "rg --search-zip pattern archive.zip"],
     ["bash", "rg -z pattern archive.zip"],
     ["bash", "rg pattern {--pre=sh,script.sh}"],
+    ["exec", "find target -name '*.jar' -delete"],
+    ["exec", "find target -name '*.jar' -exec rm {} ;"],
+    ["exec", "find target -name '*.jar' -fprint /tmp/jars.txt"],
     ["exec", "file --compile -m custom.magic"],
     ["exec", "python3 <<'PY'\nprint('hello')\nPY"],
     ["exec", "npm start"],

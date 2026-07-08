@@ -1935,6 +1935,66 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
   });
 
+  it("retries post-tool vLLM reasoning-only turns when every tool call is replay-safe", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "vllm",
+      modelId: "gemma4",
+      modelApi: "openai-completions",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec", meta: "find target -name '*.jar'", replaySafe: true }],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "vllm",
+          model: "gemma4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "The build output has the jar under target.",
+              thinkingSignature: "reasoning",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBe(REASONING_ONLY_RETRY_INSTRUCTION);
+  });
+
+  it("does not retry post-tool vLLM reasoning-only turns after unsafe tool calls", () => {
+    const retryInstruction = resolveReasoningOnlyRetryInstruction({
+      provider: "vllm",
+      modelId: "gemma4",
+      modelApi: "openai-completions",
+      aborted: false,
+      timedOut: false,
+      attempt: makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec", meta: "npm start", replaySafe: false }],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "vllm",
+          model: "gemma4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "The command may have side effects.",
+              thinkingSignature: "reasoning",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    });
+
+    expect(retryInstruction).toBeNull();
+  });
+
   it("retries unsigned thinking-only Ollama turns via the reasoning-only path", () => {
     const retryInstruction = resolveReasoningOnlyRetryInstruction({
       provider: "ollama",
@@ -3351,6 +3411,69 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
     expect(result.meta.terminalReplyKind).toBeUndefined();
     expect(result.meta.finalAssistantVisibleText).toBe("Visible StepFun answer.");
     expectWarnMessageWith("empty response detected");
+  });
+
+  it("continues after replay-safe exec output when vLLM returns reasoning without visible text", async () => {
+    mockedClassifyFailoverReason.mockReturnValue(null);
+    mockedResolveModelAsync.mockResolvedValue({
+      model: {
+        id: "gemma4",
+        provider: "vllm",
+        contextWindow: 160000,
+        api: "openai-completions",
+      },
+      error: null,
+      authStorage: {
+        setRuntimeApiKey: vi.fn(),
+      },
+      modelRegistry: {},
+    });
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: [],
+        toolMetas: [{ toolName: "exec", meta: "find target -name '*.jar'", replaySafe: true }],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "vllm",
+          model: "gemma4",
+          content: [
+            {
+              type: "thinking",
+              thinking: "The build output has one jar under target.",
+              thinkingSignature: "reasoning",
+            },
+          ],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+    mockedRunEmbeddedAttempt.mockResolvedValueOnce(
+      makeAttemptResult({
+        assistantTexts: ["The jar is target/sts.jar."],
+        lastAssistant: {
+          role: "assistant",
+          api: "openai-completions",
+          stopReason: "stop",
+          provider: "vllm",
+          model: "gemma4",
+          content: [{ type: "text", text: "The jar is target/sts.jar." }],
+        } as unknown as EmbeddedRunAttemptResult["lastAssistant"],
+      }),
+    );
+
+    const result = await runEmbeddedAgent({
+      ...overflowBaseRunParams,
+      provider: "vllm",
+      model: "gemma4",
+      runId: "run-vllm-reasoning-only-after-readonly-exec",
+    });
+
+    expect(mockedRunEmbeddedAttempt).toHaveBeenCalledTimes(2);
+    const secondCall = runAttemptCall(1);
+    expect(secondCall.prompt).toContain(REASONING_ONLY_RETRY_INSTRUCTION);
+    expect(result.meta.finalAssistantVisibleText).toBe("The jar is target/sts.jar.");
+    expectWarnMessageWith("reasoning-only assistant turn detected");
   });
 
   it("returns NO_REPLY without retrying post-tool exact silent assistant replies", async () => {

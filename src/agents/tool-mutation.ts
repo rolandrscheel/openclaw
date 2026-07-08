@@ -131,10 +131,12 @@ const READ_ONLY_SHELL_COMMANDS = new Set([
 
 const READ_ONLY_GH_PR_SUBCOMMANDS = new Set(["checks", "diff", "list", "status", "view"]);
 const READ_ONLY_GH_ISSUE_SUBCOMMANDS = new Set(["list", "status", "view"]);
+const UNSAFE_FIND_EXPRESSIONS = new Set(["-delete", "-exec", "-execdir", "-ok", "-okdir"]);
 
 const UNSAFE_RG_FLAGS = new Set(["--hostname-bin", "--pre", "--pre-glob", "--search-zip", "-z"]);
 const UNSAFE_RG_VALUE_FLAGS = ["--hostname-bin", "--pre", "--pre-glob"] as const;
 const SHELL_EXPANSION_CHARS = new Set(["$", "*", "?", "[", "]", "{", "}", "~"]);
+const DOUBLE_QUOTED_SHELL_EXPANSION_CHARS = new Set(["$"]);
 
 // Structured file-target identity for cross-tool same-target recovery.
 // Carried alongside `actionFingerprint` so comparison does not have to
@@ -179,11 +181,6 @@ function tokenizeSimpleShellCommand(command: string): string[] | undefined {
   if (/[;&|<>\n\r`]/.test(command) || command.includes("\\")) {
     return undefined;
   }
-  for (const char of SHELL_EXPANSION_CHARS) {
-    if (command.includes(char)) {
-      return undefined;
-    }
-  }
   const tokens: string[] = [];
   let current = "";
   let quote: "'" | '"' | undefined;
@@ -191,6 +188,8 @@ function tokenizeSimpleShellCommand(command: string): string[] | undefined {
     if (quote) {
       if (char === quote) {
         quote = undefined;
+      } else if (quote === '"' && DOUBLE_QUOTED_SHELL_EXPANSION_CHARS.has(char)) {
+        return undefined;
       } else {
         current += char;
       }
@@ -206,6 +205,9 @@ function tokenizeSimpleShellCommand(command: string): string[] | undefined {
         current = "";
       }
       continue;
+    }
+    if (SHELL_EXPANSION_CHARS.has(char)) {
+      return undefined;
     }
     current += char;
   }
@@ -266,6 +268,18 @@ function hasUnsafeRipgrepFlag(tokens: readonly string[]): boolean {
   });
 }
 
+function isReadOnlyFindCommand(tokens: readonly string[]): boolean {
+  return !tokens.slice(1).some((token) => {
+    const normalized = normalizeLowercaseStringOrEmpty(token);
+    return (
+      UNSAFE_FIND_EXPRESSIONS.has(normalized) ||
+      normalized.startsWith("-fprint") ||
+      normalized === "-fls" ||
+      normalized === "-fprintf"
+    );
+  });
+}
+
 function isReadOnlyGhCommand(tokens: readonly string[]): boolean {
   if (
     tokens.some((token) => {
@@ -304,6 +318,9 @@ function isPlainReadOnlyShellCommand(command: string | undefined): boolean {
   const executable = normalizeLowercaseStringOrEmpty(tokens[0]);
   if (executable === "rg" && hasUnsafeRipgrepFlag(tokens)) {
     return false;
+  }
+  if (executable === "find") {
+    return isReadOnlyFindCommand(tokens);
   }
   if (READ_ONLY_SHELL_COMMANDS.has(executable)) {
     return true;
